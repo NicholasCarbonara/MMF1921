@@ -1,0 +1,98 @@
+\documentclass[10pt]{article}
+\usepackage[letterpaper, right=1.25in, left=1.25in, top=0.75in, bottom=0.75in]{geometry}
+\usepackage{setspace}
+\setstretch{1.15}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{bm}
+\usepackage{enumerate}
+\usepackage{enumitem}
+\mathchardef\mhyphen="2D 
+\setlength\parindent{0pt}
+\usepackage[titletoc,toc,title]{appendix}
+\usepackage{footnote}
+\makesavenoteenv{tabular}
+\makesavenoteenv{table}
+\usepackage{graphicx}
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage[sorting=none, giveninits=true, backend=biber, style=numeric-comp]{biblatex}
+%the line below references the bibliography
+\bibliography{References}
+% \setlength\bibitemsep{0.25\itemsep}
+
+\usepackage{float}
+\usepackage{url}
+\usepackage[bottom]{footmisc} % Keep the footnote at the bottom of pages
+
+\usepackage[svgnames]{xcolor, colortbl}
+
+\setlength\parindent{15pt}
+
+% Package to add hyperlinks
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=blue,      
+    urlcolor=blue,
+    citecolor=black
+}
+
+\begin{document}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%       MIE377 - PROJECT 1
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+{\centering \textbf{\Large{MMF1921: Operations Research}} \par\vspace*{0.15cm}
+\textbf{\large{Project 1 (Winter 2025)}}\par\vspace*{0.15cm}
+\textbf{Group Members: Nicholas Carbonara, Josh Maier, Matthew Mamelak\centering}\par 
+}
+\vspace*{0.2cm}
+\hrule
+\vspace*{0.2cm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%       Abstract
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Insert a brief summary here.
+\vspace*{0.1cm}
+\hrule
+\vspace*{0.1cm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%       Section
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{This is a section}
+
+\subsection{This is a sub-section}
+
+
+\begin{table}[!htbp]
+\footnotesize
+\caption{Table Caption}
+\centering
+\begin{tabular}{c c c c c c c c c c}
+\hline 
+\rule{0pt}{3.5ex}This & is & a & table \\[1.5ex]
+\hline\hline
+\rule{0pt}{3.5ex}New & row & of & table \\[1.5ex]
+\hline 
+\end{tabular}
+\label{tab:example}
+\end{table}
+
+\begin{itemize}
+\itemsep -0.1em
+    \item A
+    \item list
+    \item of
+    \item items
+\end{itemize}
+
+\noindent \LaTeX \ can be tricky, for example, \% and \& need ``/" in front of the symbol for it to display correctly. Here is an example of a citation: We use data from \cite{French2016Data} and \cite{QuandlWIKI} for this project.
+\newline
+Overleaf has a lot of resources on using \LaTeX: \url{https://www.overleaf.com}
+
+\printbibliography
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% End Document
+\end{document}

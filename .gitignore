@@ -1,0 +1,9 @@
+**/ .DS_Store
+
+# Ignore all files inside Report/
+Report/*
+
+# But keep these specific files in Report/
+!Report/Report.tex
+!Report/Report.pdf
+!Report/References.bib
