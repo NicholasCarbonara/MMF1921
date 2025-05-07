@@ -83,8 +83,8 @@ function [mu, Q] = LASSO(returns, factRet, lambda, ~)
     end
 
     % EXPECTED RETURNS ------------------------------------------------------
-    mu = alpha + B * mu_f;                   % n×1
+    mu = alpha + B * mu_f                   % n×1
 
     % COVARIANCE MATRIX -----------------------------------------------------
-    Q = B * Sigma_f * B' + diag(sigma2);     % n×n
+    Q = B * Sigma_f * B' + diag(sigma2)     % n×n
 end

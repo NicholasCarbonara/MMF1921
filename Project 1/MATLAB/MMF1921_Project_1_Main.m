@@ -110,9 +110,21 @@ weights = cell(NoModels,1);            % store weights per model per period
 %--------------------------------------------------------------------------
 % Set the value of lambda and K for the LASSO and BSS models, respectively
 %--------------------------------------------------------------------------
-lambda = 1;
+lambda = 0.8;
 K      = 4;
 fromDay = 1;
+
+% Candidate values for lambda (LASSO) and K (BSS)
+lambdaGrid = [0.03, 0.1, 0.5, 1, 5, 10, 20];
+kGrid = 1:3;
+
+% Store R² values for tuning visualization
+R2_lasso_grid = NaN(length(lambdaGrid), NoPeriods);
+R2_bss_grid   = NaN(length(kGrid), NoPeriods);
+
+% store chosen lambda/K for each period
+lambda_opt = NaN(NoPeriods, 1);
+k_opt = NaN(NoPeriods, 1);
 
 for t = 1 : NoPeriods
     
@@ -138,8 +150,42 @@ for t = 1 : NoPeriods
     % -------- in‑sample fit & μ,Q ----------------------------------------
     for i = 1 : NoModels
         
-        [mu{i}, Q{i}] = FMList{i}(periodReturns, periodFactRet, lambda, K);
+        modelName = func2str(FMList{i});
+        switch modelName
+            case 'LASSO'
+                bestR2 = -Inf;
+                for l = 1:length(lambdaGrid)
+                    lam = lambdaGrid(l)
+                    [muTmp, QTmp] = LASSO(periodReturns, periodFactRet, lam, K);
+                    X = [ones(size(periodFactRet,1), 1), periodFactRet];
+                    Rs = getMeanAdjR2(X, periodReturns)
+                    R2_lasso_grid(l, t) = Rs;  % ← store R² for heatmap
+                
+                    if Rs > bestR2
+                        bestR2 = Rs;
+                        mu{i} = muTmp;
+                        Q{i} = QTmp;
+                        lambda_opt(t) = lam;
+                    end
+                end
         
+            case 'BSS'
+                bestR2 = -Inf;
+                for kval = kGrid
+                    [muTmp, QTmp] = BSS(periodReturns, periodFactRet, lambda, kval);
+                    X = [ones(size(periodFactRet,1), 1), periodFactRet(:, 1:kval)];
+                    Rs = getMeanAdjR2(X, periodReturns);
+                    if Rs > bestR2
+                        bestR2 = Rs;
+                        mu{i} = muTmp;
+                        Q{i} = QTmp;
+                        k_opt(t) = kval;
+                    end
+                end
+        
+            otherwise
+                [mu{i}, Q{i}] = FMList{i}(periodReturns, periodFactRet, lambda, K);
+        end    
         % ► NEW: adjusted R² ------------------------------------------------
         switch func2str(FMList{i})
             case 'OLS'
@@ -198,6 +244,13 @@ for t = 1 : NoPeriods
     calEnd   = calStart + calyears(4) - days(1);
     testStart = testStart + calyears(1);
     testEnd   = testStart + calyears(1) - days(1);
+
+    if ~isnan(lambda_opt(t))
+    fprintf('→ Period %d: Optimal lambda = %.3f\n', t, lambda_opt(t));
+    end
+    if ~isnan(k_opt(t))
+        fprintf('→ Period %d: Optimal K = %d\n', t, k_opt(t));
+    end
 end   % ← end main period loop
 
 
@@ -311,5 +364,37 @@ for i = 1:NoModels
     ylabel('Weights'), xlabel('Rebalance period')
 end
 
+% Helper Function
+function R2_mean = getMeanAdjR2(X, Y)
+    % X: T x k design matrix (intercept + factors)
+    % Y: T x n matrix of actual asset returns
+    % R2_mean: scalar average adjusted R² across assets
+
+    [T, n] = size(Y);
+    k_pred = size(X, 2);
+    Rs = zeros(n, 1);
+
+    for i = 1:n
+        y     = Y(:, i);
+        beta  = X \ y;
+        yhat  = X * beta;
+        SSE   = sum((y - yhat).^2);
+        SST   = sum((y - mean(y)).^2);
+        R2    = 1 - SSE / SST;
+        Rs(i) = 1 - (1 - R2) * (T - 1) / (T - k_pred);
+    end
+
+    R2_mean = mean(Rs);
+end
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Program End
+
+figure;
+imagesc(R2_lasso_grid);
+colorbar;
+xlabel('Rebalance Period');
+ylabel('Lambda');
+title('Adjusted R² Grid - LASSO');
+yticks(1:length(lambdaGrid));
+    yticklabels(string(lambdaGrid));
