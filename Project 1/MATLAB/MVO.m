@@ -35,7 +35,7 @@ function x = MVO(mu, Q, targetRet)
     % ----- 2. Quadratic objective -------------------
     % quadprog solves   ½ xᵀ H x + fᵀ x
     % so pass H = 2Q to match our objective xᵀ Q x
-    H = 2 * Q;
+    H = Q + Q';
     f = zeros(n, 1);
 
     % ----- 3. Linear constraints --------------------
