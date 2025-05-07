@@ -177,7 +177,18 @@ for t = 1 : NoPeriods
     % -------- shares held & out‑of‑sample wealth --------------------------
     for i = 1 : NoModels
         NoShares{i} = x{i}(:,t) .* currentVal(t,i) ./ currentPrices;
-        portfValue(fromDay:toDay,i) = periodPrices * NoShares{i};
+        % Calculate individual asset returns over test period
+        assetRets = (periodPrices(2:end,:) - periodPrices(1:end-1,:)) ./ periodPrices(1:end-1,:);
+        assetRets = [zeros(1, size(assetRets,2)); assetRets];  % pad first row with zeros
+        
+        % Compute portfolio return over time
+        portfRets = assetRets * NoShares{i} ./ sum(NoShares{i});  % weights fixed for period
+        
+        % Reconstruct portfolio value path
+        portfValue(fromDay, i) = currentVal(t,i);  % starting value
+        for k = 2:length(portfRets)
+            portfValue(fromDay + k - 1, i) = portfValue(fromDay + k - 2, i) * (1 + portfRets(k));
+        end
     end
     
     % -------- roll windows forward ---------------------------------------
@@ -219,10 +230,10 @@ avgRet   = mean(portfRet);                % weekly mean
 vol      = std (portfRet);                % weekly st.dev.
 sharpe   = avgRet ./ vol;                 % weekly Sharpe
 
-annFactor = sqrt(52);                     % annualise vol & Sharpe
-annRet    = (1+avgRet).^52 - 1;           % geometric approx
+annFactor = sqrt(12);                     % annualise vol & Sharpe
+annRet    = (1+avgRet).^12 - 1;           % geometric approx
 annVol    = vol * annFactor;
-annSharpe = sharpe * sqrt(52);
+annSharpe = sharpe * annFactor;
 
 fprintf('\n*** Out‑of‑sample performance (annualised) 2012‑2016 ***\n');
 fprintf('%-10s  %8s  %8s  %8s\n','Model','Return','St.dev','Sharpe');

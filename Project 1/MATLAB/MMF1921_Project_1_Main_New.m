@@ -101,8 +101,8 @@ currentVal = zeros(NoPeriods, NoModels);
 %--------------------------------------------------------------------------
 % Set the value of lambda and K for the LASSO and BSS models, respectively
 %--------------------------------------------------------------------------
-lambda = 1;
-K      = 4;
+% lambda = 
+% K      = 
 
 for t = 1 : NoPeriods
   
@@ -184,34 +184,13 @@ end
 % calculate the quality of fit each time the models are recalibrated.
 %--------------------------------------------------------------------------
 
-meanAdjR2 = mean(calc_adjR2,1);                    % average across periods
 
-fprintf('\n*** In‑sample adjusted R² (mean across 5 calibrations) ***\n');
-for i = 1:NoModels
-    fprintf('%-15s  %.4f\n', tags{i}, meanAdjR2(i));
-end
 %--------------------------------------------------------------------------
 % 4.2 Calculate the portfolio average return, variance (or standard 
 % deviation), and any other performance and/or risk metric you wish to 
 % include in your report.
 %--------------------------------------------------------------------------
-portfRet = diff(portfValue) ./ portfValue(1:end-1,:);     % ΔW / W_{t-1}
 
-avgRet   = mean(portfRet);                % weekly mean
-vol      = std (portfRet);                % weekly st.dev.
-sharpe   = avgRet ./ vol;                 % weekly Sharpe
-
-annFactor = sqrt(52);                     % annualise vol & Sharpe
-annRet    = (1+avgRet).^52 - 1;           % geometric approx
-annVol    = vol * annFactor;
-annSharpe = sharpe * sqrt(52);
-
-fprintf('\n*** Out‑of‑sample performance (annualised) 2012‑2016 ***\n');
-fprintf('%-10s  %8s  %8s  %8s\n','Model','Return','St.dev','Sharpe');
-for i = 1:NoModels
-    fprintf('%-10s  %8.2f  %8.2f  %8.2f\n', ...
-        tags{i}, 100*annRet(i), 100*annVol(i), annSharpe(i) );
-end
 
 %--------------------------------------------------------------------------
 % 4.3 Plot the portfolio wealth evolution 
