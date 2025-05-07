@@ -95,8 +95,17 @@ tags = {'OLS portfolio' 'FF portfolio' 'LASSO portfolio' 'BSS portfolio'};
 % Initiate counter for the number of observations per investment period
 toDay = 0;
 
+
+
 % Preallocate the space for the per period value of the portfolios 
 currentVal = zeros(NoPeriods, NoModels);
+
+% -------------------------------------------------------------------------
+% Prepare storage for RESULTS
+% -------------------------------------------------------------------------
+adjR2   = zeros(NoPeriods, NoModels);   % in‑sample fit
+weights = cell(NoModels,1);            % store weights per model per period
+
 
 %--------------------------------------------------------------------------
 % Set the value of lambda and K for the LASSO and BSS models, respectively
@@ -105,74 +114,78 @@ lambda = 1;
 K      = 4;
 
 for t = 1 : NoPeriods
-  
-    % Subset the returns and factor returns corresponding to the current
-    % calibration period.
+    
+    % -------- data windows unchanged -------------------------------------
     periodReturns = table2array( returns( calStart <= dates & dates <= calEnd, :) );
     periodFactRet = table2array( factorRet( calStart <= dates & dates <= calEnd, :) );
-    currentPrices = table2array( adjClose( ( calEnd - days(7) ) <= dates ... 
+    currentPrices = table2array( adjClose( ( calEnd - days(7) ) <= dates ...
                                                     & dates <= calEnd, :) )';
+    periodPrices  = table2array( adjClose( testStart <= dates & dates <= testEnd,:) );
     
-    % Subset the prices corresponding to the current out-of-sample test 
-    % period.
-    periodPrices = table2array( adjClose( testStart <= dates & dates <= testEnd,:) );
-    
-    % Set the initial value of the portfolio or update the portfolio value
+    % -------- initialise portfolio value ---------------------------------
     if t == 1
-        
         currentVal(t,:) = initialVal;
-        
     else
         for i = 1 : NoModels
-            
             currentVal(t,i) = currentPrices' * NoShares{i};
-            
         end
     end
     
-    % Update counter for the number of observations per investment period
-    fromDay = toDay + 1;
-    toDay   = toDay + size(periodPrices,1);
-    
-    % Calculate 'mu' and 'Q' using the 4 factor models.
-    % Note: You need to write the code for the 4 factor model functions. 
+    % -------- in‑sample fit & μ,Q ----------------------------------------
     for i = 1 : NoModels
         
         [mu{i}, Q{i}] = FMList{i}(periodReturns, periodFactRet, lambda, K);
         
+        % ► NEW: adjusted R² ------------------------------------------------
+        switch func2str(FMList{i})
+            case 'OLS'
+                X = [ones(size(periodFactRet,1),1), periodFactRet]; % 1+8
+                k_pred = 9;
+            case 'FF'
+                X = [ones(size(periodFactRet,1),1), periodFactRet(:,1:3)];%1+3
+                k_pred = 4;
+            case 'LASSO'
+                X = [ones(size(periodFactRet,1),1), periodFactRet]; % same 1+8
+                k_pred = 9;    % λ penalises complexity already – keep constant
+            case 'BSS'
+                X = [ones(size(periodFactRet,1),1), periodFactRet(:,1:K)];
+                k_pred = K + 1;
+        end
+        
+        % one R² per asset → store mean across assets
+        Rs = zeros(size(periodReturns,2),1);
+        for a = 1:size(periodReturns,2)
+            y     = periodReturns(:,a);
+            beta  = X\y;
+            y_hat = X*beta;
+            Rs(a) = adjR2_single(y, y_hat, k_pred);
+        end
+        adjR2(t,i) = mean(Rs);
     end
             
-    % Optimize your portfolios to get the weights 'x'
-    % Note: You need to write the code for MVO with no short sales
+    % -------- MVO optimisation -------------------------------------------
     for i = 1 : NoModels
-        
-        % Define the target return as the geometric mean of the market 
-        % factor for the current calibration period
-        targetRet = geomean(periodFactRet(:,1) + 1) - 1;
-        
-        x{i}(:,t) = MVO(mu{i}, Q{i}, targetRet); 
-            
+        targetRet    = geomean(periodFactRet(:,1) + 1) - 1;
+        x{i}(:,t)    = MVO(mu{i}, Q{i}, targetRet);
+        weights{i}   = x{i};                     % ► keep weights
     end
     
-    % Calculate the optimal number of shares of each stock you should hold
+    % -------- shares held & out‑of‑sample wealth --------------------------
     for i = 1 : NoModels
-        
-        % Number of shares your portfolio holds per stock
         NoShares{i} = x{i}(:,t) .* currentVal(t,i) ./ currentPrices;
-        
-        % Weekly portfolio value during the out-of-sample window
         portfValue(fromDay:toDay,i) = periodPrices * NoShares{i};
-        
     end
-
-    % Update your calibration and out-of-sample test periods
+    
+    % -------- roll windows forward ---------------------------------------
+    fromDay = toDay + 1;
+    toDay   = toDay + size(periodPrices,1);
+    
     calStart = calStart + calyears(1);
     calEnd   = calStart + calyears(4) - days(1);
-    
     testStart = testStart + calyears(1);
     testEnd   = testStart + calyears(1) - days(1);
+end   % ← end main period loop
 
-end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% 4. Results
@@ -184,12 +197,35 @@ end
 % calculate the quality of fit each time the models are recalibrated.
 %--------------------------------------------------------------------------
 
+meanAdjR2 = mean(adjR2,1);                    % average across periods
+
+fprintf('\n*** In‑sample adjusted R² (mean across 5 calibrations) ***\n');
+fprintf('%-10s  %.4f\n', [tags', num2str(meanAdjR2','%0.4f') ] );
+
 
 %--------------------------------------------------------------------------
 % 4.2 Calculate the portfolio average return, variance (or standard 
 % deviation), and any other performance and/or risk metric you wish to 
 % include in your report.
 %--------------------------------------------------------------------------
+
+portfRet = diff(portfValue) ./ portfValue(1:end-1,:);     % ΔW / W_{t-1}
+
+avgRet   = mean(portfRet);                % weekly mean
+vol      = std (portfRet);                % weekly st.dev.
+sharpe   = avgRet ./ vol;                 % weekly Sharpe
+
+annFactor = sqrt(52);                     % annualise vol & Sharpe
+annRet    = (1+avgRet).^52 - 1;           % geometric approx
+annVol    = vol * annFactor;
+annSharpe = sharpe * sqrt(52);
+
+fprintf('\n*** Out‑of‑sample performance (annualised) 2012‑2016 ***\n');
+fprintf('%-10s  %8s  %8s  %8s\n','Model','Return','St.dev','Sharpe');
+for i = 1:NoModels
+    fprintf('%-10s  %8.2f  %8.2f  %8.2f\n', ...
+        tags{i}, 100*annRet(i), 100*annVol(i), annSharpe(i) );
+end
 
 
 %--------------------------------------------------------------------------
@@ -251,6 +287,14 @@ set(fig2,'PaperPositionMode','Auto','PaperUnits','Inches',...
 
 % If you want to save the figure as .png for use in MS Word
 print(fig2,'fileName2','-dpng','-r0');
+
+for i = 1:NoModels
+    figure(1+i)               % figs 2..5
+    area(x{i}')
+    legend(tickers, 'Location','eastoutside','FontSize',10);
+    title([tags{i} ' weights'],'FontSize',14)
+    ylabel('Weights'), xlabel('Rebalance period')
+end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Program End
