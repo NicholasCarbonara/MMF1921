@@ -178,8 +178,7 @@ for t = 1 : NoPeriods
     end
     
     % -------- roll windows forward ---------------------------------------
-    fromDay = toDay + 1;
-    toDay   = toDay + size(periodPrices,1);
+
     
     calStart = calStart + calyears(1);
     calEnd   = calStart + calyears(4) - days(1);

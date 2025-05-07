@@ -1,4 +1,4 @@
-function r = adjR2_single(y, yhat, k)
+function r = calc_adjR2(y, yhat, k)
 % adjR2_single  Adjusted R² for one regression
 %   y      : actual (T×1)
 %   yhat   : fitted (T×1)
