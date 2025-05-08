@@ -115,7 +115,7 @@ K      = 4;
 fromDay = 1;
 
 % Candidate values for lambda (LASSO) and K (BSS)
-lambdaGrid = [0.0, 0.1, 0.5, 1, 5, 10, 20];
+lambdaGrid = logspace(-4,1,40);
 kGrid = 1:3;
 
 % Store R² values for tuning visualization
@@ -125,6 +125,8 @@ R2_bss_grid   = NaN(length(kGrid), NoPeriods);
 % store chosen lambda/K for each period
 lambda_opt = NaN(NoPeriods, 1);
 k_opt = NaN(NoPeriods, 1);
+
+
 
 for t = 1 : NoPeriods
     
@@ -153,22 +155,66 @@ for t = 1 : NoPeriods
         modelName = func2str(FMList{i});
         switch modelName
             case 'LASSO'
-                bestR2 = -Inf;
-                for l = 1:length(lambdaGrid)
-                    lam = lambdaGrid(l)
-                    [muTmp, QTmp] = LASSO(periodReturns, periodFactRet, lam, K);
-                    X = [ones(size(periodFactRet,1), 1), periodFactRet];
-                    Rs = getMeanAdjR2(X, periodReturns)
-                    R2_lasso_grid(l, t) = Rs;  % ← store R² for heatmap
-                
-                    if Rs > bestR2
-                        bestR2 = Rs;
-                        mu{i} = muTmp;
-                        Q{i} = QTmp;
-                        lambda_opt(t) = lam;
+            bestR2 = -Inf;
+            lambdaGrid = logspace(-2, 2, 30);  % λ from 0.01 to 100
+
+            % Split 4-year calibration period into 4 folds (1-year each)
+            m = size(periodReturns,1);
+            foldSize = floor(m / 4);
+            folds = cell(1,4);
+            for k = 1:4
+                folds{k} = ((k-1)*foldSize+1):(k*foldSize);
+            end
+
+            for l = 1:length(lambdaGrid)
+                lam = lambdaGrid(l);
+                R2_folds = zeros(1,4);
+
+                for f = 1:4
+                    % Indices for train/test split
+                    testIdx = folds{f};
+                    trainIdx = setdiff(1:m, testIdx);
+
+                    X_train = [ones(length(trainIdx),1), periodFactRet(trainIdx,:)];
+                    X_test  = [ones(length(testIdx),1),  periodFactRet(testIdx,:)];
+
+                    R2_assets = zeros(1, size(periodReturns,2));
+
+                    for j = 1:size(periodReturns,2)
+                        y_train = periodReturns(trainIdx, j);
+                        y_test  = periodReturns(testIdx, j);
+
+                        % Set up LASSO QP
+                        d       = size(X_train,2);
+                        A_split = [eye(d), -eye(d)];
+                        A_train = X_train * A_split;
+
+                        H = (2/length(y_train)) * (A_train' * A_train);
+                        f_qp = lam * ones(2*d,1) - (2/length(y_train)) * (A_train' * y_train);
+                        z = quadprog(H,f_qp,[],[],[],[],zeros(2*d,1),[],[],...
+                                     optimoptions('quadprog','Display','off'));
+                        beta = z(1:d) - z(d+1:end);
+
+                        % Evaluate R² out-of-sample
+                        y_pred = X_test * beta;
+                        resid = y_test - y_pred;
+                        R2_assets(j) = 1 - sum(resid.^2) / sum((y_test - mean(y_test)).^2);
                     end
+
+                    R2_folds(f) = mean(R2_assets);
                 end
-        
+
+                % Store for heatmap
+                R2_lasso_grid(l,t) = mean(R2_folds);
+
+                % If this λ is best so far, store the final model on full data
+                if R2_lasso_grid(l,t) > bestR2
+                    bestR2 = R2_lasso_grid(l,t);
+                    [mu{i}, Q{i}] = LASSO(periodReturns, periodFactRet, lam, K);
+                    lambda_opt(t) = lam;
+                end
+            end
+
             case 'BSS'
                 bestR2 = -Inf;
                 for kval = kGrid
@@ -389,12 +435,5 @@ end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Program End
-
-figure;
-imagesc(R2_lasso_grid);
-colorbar;
-xlabel('Rebalance Period');
-ylabel('Lambda');
-title('Adjusted R² Grid - LASSO');
-yticks(1:length(lambdaGrid));
-    yticklabels(string(lambdaGrid));
+mean_R2 = mean(R2_lasso_grid(:, 1:t), 2);
+semilogx(lambdaGrid, mean_R2);

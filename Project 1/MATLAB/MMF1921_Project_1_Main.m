@@ -115,7 +115,7 @@ K      = 4;
 fromDay = 1;
 
 % Candidate values for lambda (LASSO) and K (BSS)
-lambdaGrid = [0.03, 0.1, 0.5, 1, 5, 10, 20];
+lambdaGrid = logspace(-4,1,40);
 kGrid = 1:3;
 
 % Store R² values for tuning visualization
@@ -125,6 +125,8 @@ R2_bss_grid   = NaN(length(kGrid), NoPeriods);
 % store chosen lambda/K for each period
 lambda_opt = NaN(NoPeriods, 1);
 k_opt = NaN(NoPeriods, 1);
+
+
 
 for t = 1 : NoPeriods
     
@@ -153,22 +155,70 @@ for t = 1 : NoPeriods
         modelName = func2str(FMList{i});
         switch modelName
             case 'LASSO'
-                bestR2 = -Inf;
-                for l = 1:length(lambdaGrid)
-                    lam = lambdaGrid(l)
-                    [muTmp, QTmp] = LASSO(periodReturns, periodFactRet, lam, K);
-                    X = [ones(size(periodFactRet,1), 1), periodFactRet];
-                    Rs = getMeanAdjR2(X, periodReturns)
-                    R2_lasso_grid(l, t) = Rs;  % ← store R² for heatmap
-                
-                    if Rs > bestR2
-                        bestR2 = Rs;
-                        mu{i} = muTmp;
-                        Q{i} = QTmp;
-                        lambda_opt(t) = lam;
+            bestR2 = -Inf;
+            lambdaGrid = logspace(-4, 1, 30);  % wider range: 0.0001 to 10
+
+            % Split calibration period into 4 folds
+            m = size(periodReturns,1);
+            foldSize = floor(m / 4);
+            folds = cell(1,4);
+            for k = 1:4
+                folds{k} = ((k-1)*foldSize+1):(k*foldSize);
+            end
+
+            for l = 1:length(lambdaGrid)
+                lam = lambdaGrid(l);
+                R2_folds = zeros(1,4);
+                NZ_folds = zeros(1,4);
+
+                for f = 1:4
+                    testIdx = folds{f};
+                    trainIdx = setdiff(1:m, testIdx);
+
+                    X_train = [ones(length(trainIdx),1), periodFactRet(trainIdx,:)];
+                    X_test  = [ones(length(testIdx),1),  periodFactRet(testIdx,:)];
+
+                    R2_assets = zeros(1, size(periodReturns,2));
+                    NZ_assets = zeros(1, size(periodReturns,2));
+
+                    for j = 1:size(periodReturns,2)
+                        y_train = periodReturns(trainIdx, j);
+                        y_test  = periodReturns(testIdx, j);
+
+                        % LASSO QP setup
+                        d       = size(X_train,2);
+                        A_split = [eye(d), -eye(d)];
+                        A_train = X_train * A_split;
+
+                        H = (2/length(y_train)) * (A_train' * A_train);
+                        f_qp = lam * ones(2*d,1) - (2/length(y_train)) * (A_train' * y_train);
+                        z = quadprog(H,f_qp,[],[],[],[],zeros(2*d,1),[],[],...
+                                     optimoptions('quadprog','Display','off'));
+                        beta = z(1:d) - z(d+1:end);
+
+                        y_pred = X_test * beta;
+                        resid = y_test - y_pred;
+
+                        R2_assets(j) = 1 - sum(resid.^2) / sum((y_test - mean(y_test)).^2);
+                        NZ_assets(j) = nnz(beta);  % Track model sparsity
                     end
+
+                    R2_folds(f) = mean(R2_assets);
+                    NZ_folds(f) = mean(NZ_assets);
                 end
-        
+
+                R2_lasso_grid(l, t) = mean(R2_folds);  % R² heatmap
+                NZ_lasso_grid(l, t) = mean(NZ_folds);  % Sparsity heatmap
+
+                % Save best model if highest R²
+                if R2_lasso_grid(l, t) > bestR2
+                    bestR2 = R2_lasso_grid(l, t);
+                    [mu{i}, Q{i}] = LASSO(periodReturns, periodFactRet, lam, K);
+                    lambda_opt(t) = lam;
+                end
+            end
+
+
             case 'BSS'
                 bestR2 = -Inf;
                 for kval = kGrid
@@ -264,12 +314,32 @@ end   % ← end main period loop
 % calculate the quality of fit each time the models are recalibrated.
 %--------------------------------------------------------------------------
 
-meanAdjR2 = mean(adjR2,1);                    % average across periods
+adjR2 = zeros(NoPeriods, NoModels);
+modelTagList = {'OLS', 'FF', 'LASSO', 'BSS'};
 
-fprintf('\n*** In‑sample adjusted R² (mean across 5 calibrations) ***\n');
-for i = 1:NoModels
-    fprintf('%-15s  %.4f\n', tags{i}, meanAdjR2(i));
+for t = 1:NoPeriods
+    % Reconstruct calibration window for this period
+    calStartTmp = datetime('2008-01-01') + calyears(t-1);
+    calEndTmp   = calStartTmp + calyears(4) - days(1);
+    periodReturns = table2array( returns( calStartTmp <= dates & dates <= calEndTmp, :) );
+    periodFactRet = table2array( factorRet( calStartTmp <= dates & dates <= calEndTmp, :) );
+
+    for i = 1:NoModels
+        if i == 3
+            % Skipping LASSO unless you return betas from the function
+            adjR2(t,i) = NaN;
+        else
+            adjR2(t,i) = evaluate_adjR2(periodReturns, periodFactRet, modelTagList{i}, K);
+        end
+    end
 end
+
+% Create table with period-specific adjusted R² values
+rowNames = strcat("Period_", string(1:NoPeriods));
+adjR2Table = array2table(adjR2, 'RowNames', rowNames, 'VariableNames', tags);
+
+disp('Adjusted R^2 (In-Sample) per Model and Period:');
+disp(adjR2Table);
 
 %--------------------------------------------------------------------------
 % 4.2 Calculate the portfolio average return, variance (or standard 
@@ -389,12 +459,102 @@ end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Program End
+function plotLassoCVResults(lambdaGrid, R2_lasso_grid, NZ_lasso_grid, t)
+    %---------------------------------------------------------
+    % Plot R² and model sparsity across lambda values
+    %   lambdaGrid       : vector of λ values (length L)
+    %   R2_lasso_grid    : L × T matrix of R² values
+    %   NZ_lasso_grid    : L × T matrix of nonzero coefficients (optional)
+    %   t                : time window index (scalar)
+    %---------------------------------------------------------
+        lambdaGrid = lambdaGrid(:);
+    if nargin < 4
+        t = 1;  % default to first window
+    end
+    
+    % Extract R² and NZ counts for this window
+    R2_t = R2_lasso_grid(:, t);
+    NZ_t = [];
+    hasNZ = ~isempty(NZ_lasso_grid);
+    
+    if hasNZ
+        NZ_t = NZ_lasso_grid(:, t);
+    end
+    
+    % Plot R²
+    figure;
+    subplot(2,1,1);
+    semilogx(lambdaGrid, R2_t, '-o', 'LineWidth', 1.2);
+    xlabel('\lambda'); ylabel('Out-of-sample R^2');
+    title(sprintf('Cross-validated R^2 vs. \\lambda (Window %d)', t));
+    grid on;
+    
+    % Plot nonzero coefficients if provided
+    if hasNZ
+        subplot(2,1,2);
+        semilogx(lambdaGrid, NZ_t, '-s', 'LineWidth', 1.2);
+        xlabel('\lambda'); ylabel('Avg # Nonzero Coefficients');
+        title(sprintf('Model Sparsity vs. \\lambda (Window %d)', t));
+        grid on;
+    end
+end
+function r = calc_adjR2(y, yhat, k)
+% calc_adjR2 - Computes adjusted R² for one asset
+%   y      : actual (T×1)
+%   yhat   : fitted (T×1)
+%   k      : number of parameters (incl. intercept)
+%   r      : scalar adjusted R²
 
-figure;
-imagesc(R2_lasso_grid);
-colorbar;
-xlabel('Rebalance Period');
-ylabel('Lambda');
-title('Adjusted R² Grid - LASSO');
-yticks(1:length(lambdaGrid));
-    yticklabels(string(lambdaGrid));
+    T   = length(y);
+    SSE = sum((y - yhat).^2);
+    SST = sum((y - mean(y)).^2);
+    R2  = 1 - SSE/SST;
+    r   = 1 - (1 - R2)*(T - 1)/(T - k);
+end
+
+%% 
+function adjR2 = evaluate_adjR2(returns, factors, modelTag, K)
+% evaluate_adjR2 - Computes average adjusted R² across all assets
+%
+% Inputs:
+%   returns   : T × n matrix of excess returns
+%   factors   : T × p matrix of factor returns
+%   modelTag  : string, one of 'OLS', 'FF', 'BSS'
+%   K         : number of factors (used for BSS only)
+%
+% Output:
+%   adjR2     : scalar average adjusted R² across all assets
+
+    [T, n] = size(returns);
+    adjR2 = 0;
+
+    for j = 1:n
+        y = returns(:, j);
+
+        switch modelTag
+            case 'OLS'
+                X = [ones(T,1), factors];        % All 8 factors
+                k = 9;                           % 8 + intercept
+            case 'FF'
+                X = [ones(T,1), factors(:, 1:3)]; % FF3: Mkt-RF, SMB, HML
+                k = 4;                           % 3 + intercept
+            case 'BSS'
+                % Approximate: select top-K variance factors
+                [~, idx] = maxk(var(factors), K);
+                X = [ones(T,1), factors(:, idx)];
+                k = K + 1;
+            otherwise
+                error('Unsupported modelTag in evaluate_adjR2');
+        end
+
+        beta = X \ y;
+        yhat = X * beta;
+
+        adjR2 = adjR2 + calc_adjR2(y, yhat, k);
+    end
+
+    adjR2 = adjR2 / n;
+end
+
+
+plotLassoCVResults(lambdaGrid, R2_lasso_grid, NZ_lasso_grid, t);
