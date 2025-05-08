@@ -1,49 +1,39 @@
 %% MMF1921 (Summer 2025) - Project 1
-% 
-% The purpose of this program is to implement the following factor models
-% a) Multi-factor OLS regression
-% b) Fama-French 3-factor model
-% c) LASSO
-% d) Best Subset Selection
-% 
-% and to use these factor models to estimate the asset expected returns and 
-% covariance matrix. These parameters will then be used to test the 
-% out-of-sample performance using MVO to construct optimal portfolios.
-% 
-% Use can use this template to write your program.
 %
-% Student Name:
-% Student ID:
+% Factor models   : OLS, FF3, LASSO, Best‑Subset Selection
+% Portfolio stage : estimate μ & Σ → MVO → out‑of‑sample wealth
+%
+% Student Name :
+% Student ID   :
 
 clc
 clear all
 format short
 
-% Program Start
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% 1. Read input files
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-% Load the stock weekly prices
+% Load the stock weekly prices -------------------------------------------
 adjClose = readtable('MMF1921_AssetPrices.csv');
 adjClose.Properties.RowNames = cellstr(datetime(adjClose.Date));
 adjClose.Properties.RowNames = cellstr(datetime(adjClose.Properties.RowNames));
 adjClose.Date = [];
 
-% Load the factors weekly returns
+% Load the factors weekly returns ----------------------------------------
 factorRet = readtable('MMF1921_FactorReturns.csv');
 factorRet.Properties.RowNames = cellstr(datetime(factorRet.Date));
 factorRet.Properties.RowNames = cellstr(datetime(factorRet.Properties.RowNames));
 factorRet.Date = [];
 
-riskFree = factorRet(:,9);
+riskFree  = factorRet(:,9);
 factorRet = factorRet(:,1:8);
 
-% Identify the tickers and the dates 
+% Identify tickers & dates ------------------------------------------------
 tickers = adjClose.Properties.VariableNames';
 dates   = datetime(factorRet.Properties.RowNames);
 
-% Calculate the stocks' weekly EXCESS returns
+% Compute weekly EXCESS returns ------------------------------------------
 prices  = table2array(adjClose);
 returns = ( prices(2:end,:) - prices(1:end-1,:) ) ./ prices(1:end-1,:);
 returns = returns - ( diag( table2array(riskFree) ) * ones( size(returns) ) );
@@ -51,310 +41,245 @@ returns = array2table(returns);
 returns.Properties.VariableNames = tickers;
 returns.Properties.RowNames = cellstr(datetime(factorRet.Properties.RowNames));
 
-% Align the price table to the asset and factor returns tables by
-% discarding the first observation.
+% Align price table to returns/factors (drop first obs.) ------------------
 adjClose = adjClose(2:end,:);
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% 2. Define your initial parameters
+%% 2. Initial parameters
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-% Initial budget to invest ($100,000)
-initialVal = 100000;
+initialVal = 100000;               % budget ($)
+calStart   = datetime('2008-01-01');
+calEnd     = calStart + calyears(4) - days(1);
 
-% Start of in-sample calibration period 
-calStart = datetime('2008-01-01');
-calEnd   = calStart + calyears(4) - days(1);
+testStart  = datetime('2012-01-01');
+testEnd    = testStart + calyears(1) - days(1);
 
-% Start of out-of-sample test period 
-testStart = datetime('2012-01-01');
-testEnd   = testStart + calyears(1) - days(1);
+NoPeriods  = 5;                    % yearly rebalances
 
-% Number of investment periods (each investment period is 1 year long)
-NoPeriods = 5;
-
-% Factor models
-% Note: You must populate the functios OLS.m, FF.m, LASSO.m and BSS.m with your
-% own code.
-FMList = {'OLS' 'FF' 'LASSO' 'BSS'};
-FMList = cellfun(@str2func, FMList, 'UniformOutput', false);
-NoModels = length(FMList);
-
-% Tags for the portfolios under the different factor models
-tags = {'OLS portfolio' 'FF portfolio' 'LASSO portfolio' 'BSS portfolio'};
+FMList     = {'OLS','FF','LASSO','BSS'};
+FMList     = cellfun(@str2func, FMList, 'UniformOutput', false);
+NoModels   = length(FMList);
+tags       = {'OLS portfolio','FF portfolio','LASSO portfolio','BSS portfolio'};
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% 3. Construct and rebalance your portfolios
-%
-% Here you will estimate your input parameters (exp. returns and cov. 
-% matrix etc) from the Fama-French factor models. You will have to 
-% re-estimate your parameters at the start of each rebalance period, and 
-% then re-optimize and rebalance your portfolios accordingly. 
+%% 3. Construct & rebalance portfolios
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-% Initiate counter for the number of observations per investment period
-toDay = 0;
-
-
-
-% Preallocate the space for the per period value of the portfolios 
+toDay      = 0;                    % path index counter (wealth series)
 currentVal = zeros(NoPeriods, NoModels);
+adjR2      = zeros(NoPeriods, NoModels);
+weights    = cell(NoModels,1);
 
-% -------------------------------------------------------------------------
-% Prepare storage for RESULTS
-% -------------------------------------------------------------------------
-adjR2   = zeros(NoPeriods, NoModels);   % in‑sample fit
-weights = cell(NoModels,1);            % store weights per model per period
+% Hyper‑parameter search grids -------------------------------------------
+lambdaGrid = logspace(-4,1,40);    % LASSO λ candidates
+kGrid      = 1:3;                  % BSS   K candidates
 
-
-%--------------------------------------------------------------------------
-% Set the value of lambda and K for the LASSO and BSS models, respectively
-%--------------------------------------------------------------------------
-lambda = 0.8;
-K      = 4;
-fromDay = 1;
-
-% Candidate values for lambda (LASSO) and K (BSS)
-lambdaGrid = logspace(-4,1,40);
-kGrid = 1:3;
-
-% Store R² values for tuning visualization
 R2_lasso_grid = NaN(length(lambdaGrid), NoPeriods);
-R2_bss_grid   = NaN(length(kGrid), NoPeriods);
+R2_bss_grid   = NaN(length(kGrid),    NoPeriods);
 
-% store chosen lambda/K for each period
-lambda_opt = NaN(NoPeriods, 1);
-k_opt = NaN(NoPeriods, 1);
+% Containers for chosen λ / K each period --------------------------------
+lambda_opt = NaN(NoPeriods,1);
+k_opt      = NaN(NoPeriods,1);
 
+fromDay = 1;   % pointer into wealth vector
 
-
-for t = 1 : NoPeriods
+for t = 1:NoPeriods
     
-    % -------- data windows unchanged -------------------------------------
+    % ------- CALIBRATION & TEST windows ---------------------------------
     periodReturns = table2array( returns( calStart <= dates & dates <= calEnd, :) );
     periodFactRet = table2array( factorRet( calStart <= dates & dates <= calEnd, :) );
     currentPrices = table2array( adjClose( ( calEnd - days(7) ) <= dates ...
                                                     & dates <= calEnd, :) )';
     periodPrices  = table2array( adjClose( testStart <= dates & dates <= testEnd,:) );
-
+    
     fromDay = toDay + 1;
     toDay   = toDay + size(periodPrices,1);
     
-    % -------- initialise portfolio value ---------------------------------
+    % ------- initial wealth ---------------------------------------------
     if t == 1
         currentVal(t,:) = initialVal;
     else
-        for i = 1 : NoModels
+        for i = 1:NoModels
             currentVal(t,i) = currentPrices' * NoShares{i};
         end
     end
     
-    % -------- in‑sample fit & μ,Q ----------------------------------------
-    for i = 1 : NoModels
+    % ------- parameter estimation ---------------------------------------
+    for i = 1:NoModels
         
         modelName = func2str(FMList{i});
+        
         switch modelName
+            
+            % ============================================================= LASSO
             case 'LASSO'
-            bestR2 = -Inf;
-            lambdaGrid = logspace(-4, 1, 30);  % wider range: 0.0001 to 10
-
-            % Split calibration period into 4 folds
-            m = size(periodReturns,1);
-            foldSize = floor(m / 4);
-            folds = cell(1,4);
-            for k = 1:4
-                folds{k} = ((k-1)*foldSize+1):(k*foldSize);
-            end
-
-            for l = 1:length(lambdaGrid)
-                lam = lambdaGrid(l);
-                R2_folds = zeros(1,4);
-                NZ_folds = zeros(1,4);
-
-                for f = 1:4
-                    testIdx = folds{f};
-                    trainIdx = setdiff(1:m, testIdx);
-
-                    X_train = [ones(length(trainIdx),1), periodFactRet(trainIdx,:)];
-                    X_test  = [ones(length(testIdx),1),  periodFactRet(testIdx,:)];
-
-                    R2_assets = zeros(1, size(periodReturns,2));
-                    NZ_assets = zeros(1, size(periodReturns,2));
-
-                    for j = 1:size(periodReturns,2)
-                        y_train = periodReturns(trainIdx, j);
-                        y_test  = periodReturns(testIdx, j);
-
-                        % LASSO QP setup
-                        d       = size(X_train,2);
-                        A_split = [eye(d), -eye(d)];
-                        A_train = X_train * A_split;
-
-                        H = (2/length(y_train)) * (A_train' * A_train);
-                        f_qp = lam * ones(2*d,1) - (2/length(y_train)) * (A_train' * y_train);
-                        z = quadprog(H,f_qp,[],[],[],[],zeros(2*d,1),[],[],...
-                                     optimoptions('quadprog','Display','off'));
-                        beta = z(1:d) - z(d+1:end);
-
-                        y_pred = X_test * beta;
-                        resid = y_test - y_pred;
-
-                        R2_assets(j) = 1 - sum(resid.^2) / sum((y_test - mean(y_test)).^2);
-                        NZ_assets(j) = nnz(beta);  % Track model sparsity
+                bestR2 = -Inf;
+                m      = size(periodReturns,1);
+                foldSz = floor(m/4);
+                folds  = arrayfun(@(k) ((k-1)*foldSz+1):(k*foldSz), 1:4, 'Uni',0);
+                
+                for l = 1:length(lambdaGrid)
+                    lam = lambdaGrid(l);
+                    R2_folds = zeros(1,4);
+                    
+                    for f = 1:4
+                        testIdx  = folds{f};
+                        trainIdx = setdiff(1:m, testIdx);
+                        
+                        Xtr = [ones(length(trainIdx),1), periodFactRet(trainIdx,:)];
+                        Xte = [ones(length(testIdx),1),  periodFactRet(testIdx,:) ];
+                        
+                        R2_assets = zeros(1, size(periodReturns,2));
+                        
+                        for j = 1:size(periodReturns,2)
+                            ytr = periodReturns(trainIdx,j);
+                            yte = periodReturns(testIdx ,j);
+                            
+                            d   = size(Xtr,2);
+                            A   = [eye(d), -eye(d)];          % β⁺/β⁻ split
+                            H   = (2/length(ytr)) * ( (Xtr*A)' * (Xtr*A) );
+                            f_q = lam*ones(2*d,1) - (2/length(ytr))*( (Xtr*A)'*ytr );
+                            
+                            z   = quadprog(H, f_q, [], [], [], [], ...
+                                           zeros(2*d,1), [], [], ...
+                                           optimoptions('quadprog','Display','off'));
+                            beta = z(1:d) - z(d+1:end);
+                            
+                            yhat = Xte * beta;
+                            R2_assets(j) = 1 - sum((yte - yhat).^2) ...
+                                             / sum((yte - mean(yte)).^2);
+                        end
+                        R2_folds(f) = mean(R2_assets);
                     end
-
-                    R2_folds(f) = mean(R2_assets);
-                    NZ_folds(f) = mean(NZ_assets);
+                    
+                    R2_lasso_grid(l,t) = mean(R2_folds);
+                    
+                    if R2_lasso_grid(l,t) > bestR2
+                        bestR2         = R2_lasso_grid(l,t);
+                        [mu{i}, Q{i}]  = LASSO(periodReturns, periodFactRet, lam, 0);
+                        lambda_opt(t)  = lam;
+                    end
                 end
-
-                R2_lasso_grid(l, t) = mean(R2_folds);  % R² heatmap
-                NZ_lasso_grid(l, t) = mean(NZ_folds);  % Sparsity heatmap
-
-                % Save best model if highest R²
-                if R2_lasso_grid(l, t) > bestR2
-                    bestR2 = R2_lasso_grid(l, t);
-                    [mu{i}, Q{i}] = LASSO(periodReturns, periodFactRet, lam, K);
-                    lambda_opt(t) = lam;
-                end
-            end
-
-
+                
+            % ============================================================= BSS
             case 'BSS'
                 bestR2 = -Inf;
+                
                 for kval = kGrid
-                    [muTmp, QTmp] = BSS(periodReturns, periodFactRet, lambda, kval);
-                    X = [ones(size(periodFactRet,1), 1), periodFactRet(:, 1:kval)];
-                    Rs = getMeanAdjR2(X, periodReturns);
-                    if Rs > bestR2
-                        bestR2 = Rs;
-                        mu{i} = muTmp;
-                        Q{i} = QTmp;
-                        k_opt(t) = kval;
+                    [muTmp,QTmp] = BSS(periodReturns, periodFactRet, 0, kval);
+                    
+                    X      = [ones(size(periodFactRet,1),1), periodFactRet(:,1:kval)];
+                    RsMean = getMeanAdjR2(X, periodReturns);
+                    
+                    if RsMean > bestR2
+                        bestR2      = RsMean;
+                        mu{i}       = muTmp;
+                        Q{i}        = QTmp;
+                        k_opt(t)    = kval;
                     end
+                    R2_bss_grid(kval,t) = RsMean;
                 end
-        
+            
+            % ============================================================= OLS / FF
             otherwise
-                [mu{i}, Q{i}] = FMList{i}(periodReturns, periodFactRet, lambda, K);
-        end    
-        % ► NEW: adjusted R² ------------------------------------------------
-        switch func2str(FMList{i})
-            case 'OLS'
-                X = [ones(size(periodFactRet,1),1), periodFactRet]; % 1+8
-                k_pred = 9;
-            case 'FF'
-                X = [ones(size(periodFactRet,1),1), periodFactRet(:,1:3)];%1+3
-                k_pred = 4;
-            case 'LASSO'
-                X = [ones(size(periodFactRet,1),1), periodFactRet]; % same 1+8
-                k_pred = 9;    % λ penalises complexity already – keep constant
-            case 'BSS'
-                X = [ones(size(periodFactRet,1),1), periodFactRet(:,1:K)];
-                k_pred = K + 1;
+                [mu{i}, Q{i}] = FMList{i}(periodReturns, periodFactRet, 0, 0);
         end
         
-        % one R² per asset → store mean across assets
+        % ------- adjusted R² (store mean across assets) ------------------
+        switch modelName
+            case 'OLS'
+                X = [ones(size(periodFactRet,1),1), periodFactRet];
+                k_pred = 9;
+            case 'FF'
+                X = [ones(size(periodFactRet,1),1), periodFactRet(:,1:3)];
+                k_pred = 4;
+            case 'LASSO'
+                X = [ones(size(periodFactRet,1),1), periodFactRet];
+                k_pred = 9;
+            case 'BSS'
+                X = [ones(size(periodFactRet,1),1), periodFactRet(:,1:k_opt(t))];
+                k_pred = k_opt(t) + 1;
+        end
+        
         Rs = zeros(size(periodReturns,2),1);
         for a = 1:size(periodReturns,2)
             y     = periodReturns(:,a);
             beta  = X\y;
-            y_hat = X*beta;
-            Rs(a) = calc_adjR2(y, y_hat, k_pred);
+            Rs(a) = calc_adjR2(y, X*beta, k_pred);
         end
         adjR2(t,i) = mean(Rs);
     end
-            
-    % -------- MVO optimisation -------------------------------------------
-    for i = 1 : NoModels
-        targetRet    = geomean(periodFactRet(:,1) + 1) - 1;
-        x{i}(:,t)    = MVO(mu{i}, Q{i}, targetRet);
-        weights{i}   = x{i};                     % ► keep weights
+    
+    % ------- report best λ / K for this period --------------------------
+    if ~isnan(lambda_opt(t))
+        fprintf('✓ Period %d  |  optimal λ  = %.4g\n', t, lambda_opt(t));
+    end
+    if ~isnan(k_opt(t))
+        fprintf('✓ Period %d  |  optimal K  = %d\n',   t, k_opt(t));
     end
     
-    % -------- shares held & out‑of‑sample wealth --------------------------
-    for i = 1 : NoModels
+    % ------- MVO optimisation -------------------------------------------
+    for i = 1:NoModels
+        targetRet = geomean(periodFactRet(:,1)+1)-1;
+        x{i}(:,t) = MVO(mu{i}, Q{i}, targetRet);
+        weights{i}= x{i};
+    end
+    
+    % ------- shares held & wealth path ----------------------------------
+    for i = 1:NoModels
         NoShares{i} = x{i}(:,t) .* currentVal(t,i) ./ currentPrices;
-        % Calculate individual asset returns over test period
-        assetRets = (periodPrices(2:end,:) - periodPrices(1:end-1,:)) ./ periodPrices(1:end-1,:);
-        assetRets = [zeros(1, size(assetRets,2)); assetRets];  % pad first row with zeros
         
-        % Compute portfolio return over time
-        portfRets = assetRets * NoShares{i} ./ sum(NoShares{i});  % weights fixed for period
+        assetRets = (periodPrices(2:end,:) - periodPrices(1:end-1,:)) ...
+                                          ./ periodPrices(1:end-1,:);
+        assetRets = [zeros(1,size(assetRets,2)); assetRets];
+        portfRets = assetRets * NoShares{i} ./ sum(NoShares{i});
         
-        % Reconstruct portfolio value path
-        portfValue(fromDay, i) = currentVal(t,i);  % starting value
+        portfValue(fromDay,i) = currentVal(t,i);
         for k = 2:length(portfRets)
-            portfValue(fromDay + k - 1, i) = portfValue(fromDay + k - 2, i) * (1 + portfRets(k));
+            portfValue(fromDay+k-1,i) = portfValue(fromDay+k-2,i) ...
+                                      * (1 + portfRets(k));
         end
     end
     
-    % -------- roll windows forward ---------------------------------------
-
-    
-    calStart = calStart + calyears(1);
-    calEnd   = calStart + calyears(4) - days(1);
+    % ------- roll windows ------------------------------------------------
+    calStart  = calStart  + calyears(1);
+    calEnd    = calStart  + calyears(4) - days(1);
     testStart = testStart + calyears(1);
     testEnd   = testStart + calyears(1) - days(1);
-
-    if ~isnan(lambda_opt(t))
-    fprintf('→ Period %d: Optimal lambda = %.3f\n', t, lambda_opt(t));
-    end
-    if ~isnan(k_opt(t))
-        fprintf('→ Period %d: Optimal K = %d\n', t, k_opt(t));
-    end
-end   % ← end main period loop
-
+end  % end main loop
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% 4. Results
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-%--------------------------------------------------------------------------
-% 4.1 Evaluate any measures of fit of the regression models to assess their
-% in-sample quality. You may want to modify Section 3 of this program to
-% calculate the quality of fit each time the models are recalibrated.
-%--------------------------------------------------------------------------
-
-adjR2 = zeros(NoPeriods, NoModels);
-modelTagList = {'OLS', 'FF', 'LASSO', 'BSS'};
-
+% ------------------------------------------------------------------ 4.0 Hyper‑parameter summary
+fprintf('\n================  Hyper‑parameter Summary  ================\n');
+fprintf('Period   Optimal λ (LASSO)   Optimal K (BSS)\n');
+fprintf('------   -----------------   ---------------\n');
 for t = 1:NoPeriods
-    % Reconstruct calibration window for this period
-    calStartTmp = datetime('2008-01-01') + calyears(t-1);
-    calEndTmp   = calStartTmp + calyears(4) - days(1);
-    periodReturns = table2array( returns( calStartTmp <= dates & dates <= calEndTmp, :) );
-    periodFactRet = table2array( factorRet( calStartTmp <= dates & dates <= calEndTmp, :) );
-
-    for i = 1:NoModels
-        if i == 3
-            % Skipping LASSO unless you return betas from the function
-            adjR2(t,i) = NaN;
-        else
-            adjR2(t,i) = evaluate_adjR2(periodReturns, periodFactRet, modelTagList{i}, K);
-        end
-    end
+    fprintf('%6d   %15.6g   %15s\n', ...
+        t, ...
+        lambda_opt(t), ...
+        ternary(~isnan(k_opt(t)), num2str(k_opt(t)), '‑'));
 end
+fprintf('============================================================\n\n');
 
-% Create table with period-specific adjusted R² values
-rowNames = strcat("Period_", string(1:NoPeriods));
-adjR2Table = array2table(adjR2, 'RowNames', rowNames, 'VariableNames', tags);
-
-disp('Adjusted R^2 (In-Sample) per Model and Period:');
+% ------------------------------------------------------------------ 4.1 Adjusted R² table
+rowNames   = strcat("Period_", string(1:NoPeriods));
+adjR2Table = array2table(adjR2, 'RowNames', rowNames, ...
+                                   'VariableNames', tags);
+disp('Adjusted R^2 (In‑Sample) per Model and Period:');
 disp(adjR2Table);
 
-%--------------------------------------------------------------------------
-% 4.2 Calculate the portfolio average return, variance (or standard 
-% deviation), and any other performance and/or risk metric you wish to 
-% include in your report.
-%--------------------------------------------------------------------------
+% ------------------------------------------------------------------ 4.2 Performance metrics
+portfRet = diff(portfValue)./portfValue(1:end-1,:);
+avgRet   = mean(portfRet);
+vol      = std (portfRet);
+sharpe   = avgRet ./ vol;
 
-portfRet = diff(portfValue) ./ portfValue(1:end-1,:);     % ΔW / W_{t-1}
-
-avgRet   = mean(portfRet);                % weekly mean
-vol      = std (portfRet);                % weekly st.dev.
-sharpe   = avgRet ./ vol;                 % weekly Sharpe
-
-annFactor = sqrt(12);                     % annualise vol & Sharpe
-annRet    = (1+avgRet).^12 - 1;           % geometric approx
+annFactor = sqrt(12);
+annRet    = (1+avgRet).^12 - 1;
 annVol    = vol * annFactor;
 annSharpe = sharpe * annFactor;
 
@@ -362,149 +287,48 @@ fprintf('\n*** Out‑of‑sample performance (annualised) 2012‑2016 ***\n');
 fprintf('%-10s  %8s  %8s  %8s\n','Model','Return','St.dev','Sharpe');
 for i = 1:NoModels
     fprintf('%-10s  %8.2f  %8.2f  %8.2f\n', ...
-        tags{i}, 100*annRet(i), 100*annVol(i), annSharpe(i) );
+        tags{i}, 100*annRet(i), 100*annVol(i), annSharpe(i));
 end
 
-
-%--------------------------------------------------------------------------
-% 4.3 Plot the portfolio wealth evolution 
-% 
-% Note: The code below plots all portfolios onto a single plot. However,
-% you may want to split this into multiple plots for clarity, or to
-% compare a subset of the portfolios. 
-%--------------------------------------------------------------------------
-plotDates = dates(dates >= datetime('2012-01-01') );
-
-fig1 = figure(1);
-
-for i = 1 : NoModels
-    
-    plot( plotDates, portfValue(:,i) )
-    hold on
-    
+% ------------------------------------------------------------------ 4.3 Wealth plot
+plotDates = dates(dates >= datetime('2012-01-01'));
+figure(1); clf
+for i = 1:NoModels
+    plot(plotDates, portfValue(:,i)); hold on
 end
-
-legend(tags, 'Location', 'eastoutside','FontSize',12);
+legend(tags,'Location','eastoutside','FontSize',12);
 datetick('x','dd-mmm-yyyy','keepticks','keeplimits');
 set(gca,'XTickLabelRotation',30);
-title('Portfolio value', 'FontSize', 14)
-ylabel('Value','interpreter','latex','FontSize',12);
+title('Portfolio value','FontSize',14);
+ylabel('Value','FontSize',12);
+print(gcf,'fileName','-dpng','-r0');
 
-% Define the plot size in inches
-set(fig1,'Units','Inches', 'Position', [0 0 8, 5]);
-pos1 = get(fig1,'Position');
-set(fig1,'PaperPositionMode','Auto','PaperUnits','Inches',...
-    'PaperSize',[pos1(3), pos1(4)]);
-
-% If you want to save the figure as .pdf for use in LaTeX
-% print(fig1,'fileName','-dpdf','-r0');
-
-% If you want to save the figure as .png for use in MS Word
-print(fig1,'fileName','-dpng','-r0');
-
-%--------------------------------------------------------------------------
-% 4.4 Plot the portfolio weights period-over-period
-%--------------------------------------------------------------------------
-
-% OLS portfolio weights
-fig2 = figure(2);
-area(x{1}')
-legend(tickers, 'Location', 'eastoutside','FontSize',12);
-title('OLS portfolio weights', 'FontSize', 14)
-ylabel('Weights','interpreter','latex','FontSize',12);
-xlabel('Rebalance period','interpreter','latex','FontSize',12);
-
-% Define the plot size in inches
-set(fig2,'Units','Inches', 'Position', [0 0 8, 5]);
-pos1 = get(fig2,'Position');
-set(fig2,'PaperPositionMode','Auto','PaperUnits','Inches',...
-    'PaperSize',[pos1(3), pos1(4)]);
-
-% If you want to save the figure as .pdf for use in LaTeX
-% print(fig2,'fileName2','-dpdf','-r0');
-
-% If you want to save the figure as .png for use in MS Word
-print(fig2,'fileName2','-dpng','-r0');
-
+% ------------------------------------------------------------------ 4.4 Portfolio‑weights area charts
 for i = 1:NoModels
-    figure(1+i)               % figs 2..5
-    area(x{i}')
-    legend(tickers, 'Location','eastoutside','FontSize',10);
-    title([tags{i} ' weights'],'FontSize',14)
-    ylabel('Weights'), xlabel('Rebalance period')
-end
-
-% Helper Function
-function R2_mean = getMeanAdjR2(X, Y)
-    % X: T x k design matrix (intercept + factors)
-    % Y: T x n matrix of actual asset returns
-    % R2_mean: scalar average adjusted R² across assets
-
-    [T, n] = size(Y);
-    k_pred = size(X, 2);
-    Rs = zeros(n, 1);
-
-    for i = 1:n
-        y     = Y(:, i);
-        beta  = X \ y;
-        yhat  = X * beta;
-        SSE   = sum((y - yhat).^2);
-        SST   = sum((y - mean(y)).^2);
-        R2    = 1 - SSE / SST;
-        Rs(i) = 1 - (1 - R2) * (T - 1) / (T - k_pred);
-    end
-
-    R2_mean = mean(Rs);
+    figure(i+1); clf
+    area(x{i}'); box on
+    legend(tickers,'Location','eastoutside','FontSize',10);
+    title([tags{i} ' weights'],'FontSize',14);
+    ylabel('Weights'); xlabel('Rebalance period');
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Program End
-function plotLassoCVResults(lambdaGrid, R2_lasso_grid, NZ_lasso_grid, t)
-    %---------------------------------------------------------
-    % Plot R² and model sparsity across lambda values
-    %   lambdaGrid       : vector of λ values (length L)
-    %   R2_lasso_grid    : L × T matrix of R² values
-    %   NZ_lasso_grid    : L × T matrix of nonzero coefficients (optional)
-    %   t                : time window index (scalar)
-    %---------------------------------------------------------
-        lambdaGrid = lambdaGrid(:);
-    if nargin < 4
-        t = 1;  % default to first window
-    end
-    
-    % Extract R² and NZ counts for this window
-    R2_t = R2_lasso_grid(:, t);
-    NZ_t = [];
-    hasNZ = ~isempty(NZ_lasso_grid);
-    
-    if hasNZ
-        NZ_t = NZ_lasso_grid(:, t);
-    end
-    
-    % Plot R²
-    figure;
-    subplot(2,1,1);
-    semilogx(lambdaGrid, R2_t, '-o', 'LineWidth', 1.2);
-    xlabel('\lambda'); ylabel('Out-of-sample R^2');
-    title(sprintf('Cross-validated R^2 vs. \\lambda (Window %d)', t));
-    grid on;
-    
-    % Plot nonzero coefficients if provided
-    if hasNZ
-        subplot(2,1,2);
-        semilogx(lambdaGrid, NZ_t, '-s', 'LineWidth', 1.2);
-        xlabel('\lambda'); ylabel('Avg # Nonzero Coefficients');
-        title(sprintf('Model Sparsity vs. \\lambda (Window %d)', t));
-        grid on;
-    end
-end
-function r = calc_adjR2(y, yhat, k)
-% calc_adjR2 - Computes adjusted R² for one asset
-%   y      : actual (T×1)
-%   yhat   : fitted (T×1)
-%   k      : number of parameters (incl. intercept)
-%   r      : scalar adjusted R²
+% Helper functions (all referenced above)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+function R2_mean = getMeanAdjR2(X, Y)
+    [T,n] = size(Y); k = size(X,2);
+    Rs = zeros(n,1);
+    for i = 1:n
+        y    = Y(:,i);
+        beta = X\y;
+        yhat = X*beta;
+        Rs(i)= calc_adjR2(y,yhat,k);
+    end
+    R2_mean = mean(Rs);
+end
+
+function r = calc_adjR2(y,yhat,k)
     T   = length(y);
     SSE = sum((y - yhat).^2);
     SST = sum((y - mean(y)).^2);
@@ -512,49 +336,6 @@ function r = calc_adjR2(y, yhat, k)
     r   = 1 - (1 - R2)*(T - 1)/(T - k);
 end
 
-%% 
-function adjR2 = evaluate_adjR2(returns, factors, modelTag, K)
-% evaluate_adjR2 - Computes average adjusted R² across all assets
-%
-% Inputs:
-%   returns   : T × n matrix of excess returns
-%   factors   : T × p matrix of factor returns
-%   modelTag  : string, one of 'OLS', 'FF', 'BSS'
-%   K         : number of factors (used for BSS only)
-%
-% Output:
-%   adjR2     : scalar average adjusted R² across all assets
-
-    [T, n] = size(returns);
-    adjR2 = 0;
-
-    for j = 1:n
-        y = returns(:, j);
-
-        switch modelTag
-            case 'OLS'
-                X = [ones(T,1), factors];        % All 8 factors
-                k = 9;                           % 8 + intercept
-            case 'FF'
-                X = [ones(T,1), factors(:, 1:3)]; % FF3: Mkt-RF, SMB, HML
-                k = 4;                           % 3 + intercept
-            case 'BSS'
-                % Approximate: select top-K variance factors
-                [~, idx] = maxk(var(factors), K);
-                X = [ones(T,1), factors(:, idx)];
-                k = K + 1;
-            otherwise
-                error('Unsupported modelTag in evaluate_adjR2');
-        end
-
-        beta = X \ y;
-        yhat = X * beta;
-
-        adjR2 = adjR2 + calc_adjR2(y, yhat, k);
-    end
-
-    adjR2 = adjR2 / n;
+function out = ternary(cond,a,b)
+    if cond; out = a; else; out = b; end
 end
-
-
-plotLassoCVResults(lambdaGrid, R2_lasso_grid, NZ_lasso_grid, t);
