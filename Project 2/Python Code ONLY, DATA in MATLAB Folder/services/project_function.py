@@ -21,14 +21,11 @@ def project_function(periodReturns, periodFactRet, x0=None):
     # Initialize the advanced strategy
     strategy = AdvancedStrategy(
         lookback_period=36,  # Use 3 years of data
-        max_weight=0.1,      # Maximum 10% in any single asset
-        target_vol=0.15,     # Target 15% annual volatility
-        use_pca=True,        # Use PCA for factor reduction
-        use_lasso=True,      # Use LASSO for factor selection
-        use_shrinkage=True   # Use covariance shrinkage
+        max_weight=0.05,     # Maximum 5% in any single asset
+        target_vol=0.06      # Target 6% annual volatility
     )
     
     # Execute the strategy
-    x = strategy.execute_strategy(periodReturns, periodFactRet)
+    x = strategy.generate_weights(periodReturns, periodFactRet)
     
     return x
