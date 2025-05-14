@@ -6,87 +6,49 @@ import cvxpy as cp
 
 class AdvancedStrategy:
     def __init__(self, 
-                 lookback_period=36,
-                 max_weight=0.05,      # 5% position limit
-                 target_vol=0.06,      # 6% target volatility
-                 rebalance_freq=6,     # Semi-annual rebalancing
-                 turnover_penalty=5.0): # Reduced turnover penalty
+                 lookback_period=48,   # Longer lookback for stability
+                 max_weight=0.05,     # 5% position limit
+                 target_vol=0.06,     # 6% target volatility
+                 rebalance_freq=18,   # Rebalance every 18 months
+                 turnover_penalty=5.0):
         self.lookback_period = lookback_period
         self.max_weight = max_weight
         self.target_vol = target_vol
-        self.min_vol = target_vol * 0.8  # Allow minimum volatility of 80% of target
+        self.min_vol = target_vol * 0.8
         self.rebalance_freq = rebalance_freq
         self.turnover_penalty = turnover_penalty
         self.prev_weights = None
         self.months_since_rebalance = 0
-        
+
     def generate_weights(self, returns, factRet):
-        """
-        Generate portfolio weights with focus on Sharpe ratio and low turnover
-        """
         if len(returns) < self.lookback_period:
             n_assets = returns.shape[1]
             return np.ones(n_assets) / n_assets
-        
-        # Use recent data for estimation
         recent_returns = returns.iloc[-self.lookback_period:]
         recent_factRet = factRet.iloc[-self.lookback_period:]
-        
-        # Increment months since last rebalance
         self.months_since_rebalance += 1
-        
-        # Enhanced parameter estimation
         mu, Q = AdvancedEstimators.robust_return_estimation(recent_returns, recent_factRet)
-        
-        # Get current regime and risk parameters
         regime = self._detect_regime(recent_returns)
         risk_aversion = self._get_risk_aversion(regime)
-        
-        # Dynamic turnover adjustment
-        if regime in ['low_vol_up', 'high_vol_up']:
-            turnover_mult = 0.5  # More trading allowed in favorable conditions
-        else:
-            turnover_mult = 1.0  # Conservative in unfavorable conditions
-        
-        # Optimize portfolio
         try:
-            # Blend of minimum variance and risk parity
             mv_weights = self._minimum_variance(Q)
             rp_weights = self._risk_parity(Q)
-            
-            # Dynamic blending based on regime
-            if regime in ['low_vol_up', 'high_vol_up']:
-                blend = 0.7  # More weight to risk parity in favorable conditions
-            else:
-                blend = 0.3  # More weight to minimum variance in unfavorable conditions
-                
-            weights = blend * mv_weights + (1 - blend) * rp_weights
-            
-            # Apply turnover control if previous weights exist
-            if self.prev_weights is not None:
-                weights = 0.8 * weights + 0.2 * self.prev_weights
-            
+            weights = 0.7 * mv_weights + 0.3 * rp_weights
         except:
-            # Fallback to minimum variance if optimization fails
             weights = self._minimum_variance(Q)
-        
-        # Apply position limits
-        weights = np.minimum(weights, self.max_weight)
-        weights = np.maximum(weights, 0)
+        # --- SIMPLE POST-PROCESSING ---
+        weights = np.clip(weights, 0, self.max_weight)
         weights = weights / np.sum(weights)
-        
-        # Volatility targeting
+        if self.prev_weights is not None:
+            weights = 0.6 * self.prev_weights + 0.4 * weights
         port_vol = np.sqrt(252 * weights.T @ Q @ weights)
         if port_vol > self.target_vol:
             vol_scale = self.target_vol / port_vol
             weights = weights * vol_scale
             weights = weights / np.sum(weights)
-        
-        # Update state
         self.prev_weights = weights.copy()
         if self.months_since_rebalance >= self.rebalance_freq:
             self.months_since_rebalance = 0
-        
         return weights
 
     def _get_risk_aversion(self, regime):
